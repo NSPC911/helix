@@ -1,0 +1,78 @@
+name: Daily Patchy Build
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      UPSTREAM_REPO: helix-editor/helix
+
+    steps:
+      - name: Setup Git
+        run: git config --global user.name "patchy-bot" && git config --global user.email "patchy-bot@example.com"
+
+      - name: Checkout fork (master)
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+
+      - name: Fetch and rebase onto upstream/master
+        run: |
+          git fetch upstream
+          git checkout master
+          git rebase upstream/master
+
+      - name: Delete old patchy branch if exists
+        run: |
+          git branch -D patchy || echo "No existing patchy branch"
+
+      - name: Create new patchy branch
+        run: git checkout -b patchy
+
+      - name: Download patchy
+        run: |
+          Invoke-WebRequest https://github.com/nik-rev/patchy/releases/download/v1.3.0/patchy-bin-x86_64-pc-windows-msvc.zip -OutFile patchy.zip
+          Expand-Archive patchy.zip -DestinationPath patchy-bin
+          echo "${{ github.workspace }}\patchy-bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Add patchy config
+        run: |
+          Invoke-WebRequest https://gist.githubusercontent.com/NSPC911/2ce119d7a319d6b15331c090bec396d1/raw -OutFile .patchy/config.toml
+
+      - name: Commit patchy config
+        run: |
+          git add .patchy/config.toml
+          git commit -m "Add patchy config"
+
+      - name: Run patchy
+        run: patchy run
+
+      - name: Build Helix
+        run: cargo install --path helix-term --locked
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: helix-build
+          path: ./target/release/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.run_attempt != 1 && format('{0}', steps.date.outputs.today) || format('{0}', github.run_id) }}
+          name: "Automated Patchy Build ${{ steps.date.outputs.today }}"
+          files: ./target/release/*
+
+      - name: Set date output
+        id: date
+        run: echo "today=$(Get-Date -Format yyyy.MM.dd)" >> $env:GITHUB_OUTPUT
