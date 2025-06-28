@@ -1,0 +1,1938 @@
+From 337179596d5bff963bb4170bca7805918e99b1d4 Mon Sep 17 00:00:00 2001
+From: NSPC911 <87571998+NSPC911@users.noreply.github.com>
+Date: Tue, 24 Jun 2025 19:13:09 +0800
+Subject: [PATCH] Merged PR 12369 (icons-v2)
+
+---
+ Cargo.lock                                    |    2 +
+ helix-term/src/commands.rs                    |   85 +-
+ helix-term/src/commands/lsp.rs                |   56 +-
+ helix-term/src/config.rs                      |   24 +
+ helix-term/src/handlers/document_colors.rs    |    5 +-
+ helix-term/src/ui/completion.rs               |   28 +-
+ helix-term/src/ui/editor.rs                   |   15 +-
+ helix-term/src/ui/mod.rs                      |   38 +-
+ helix-term/src/ui/statusline.rs               |  126 +-
+ .../src/ui/text_decorations/diagnostics.rs    |   19 +
+ helix-view/Cargo.toml                         |    1 +
+ helix-view/src/gutter.rs                      |   43 +-
+ helix-view/src/icons.rs                       | 1054 +++++++++++++++++
+ helix-view/src/lib.rs                         |    1 +
+ 14 files changed, 1427 insertions(+), 70 deletions(-)
+ create mode 100644 helix-view/src/icons.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index f14a00201..b608e17c1 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1643,6 +1643,7 @@ dependencies = [
+  "serde",
+  "serde_json",
+  "slotmap",
++ "smartstring",
+  "tempfile",
+  "thiserror 2.0.12",
+  "tokio",
+@@ -2565,6 +2566,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "3fb72c633efbaa2dd666986505016c32c3044395ceaf881518399d2f4127ee29"
+ dependencies = [
+  "autocfg",
++ "serde",
+  "static_assertions",
+  "version_check",
+ ]
+diff --git a/helix-term/src/commands.rs b/helix-term/src/commands.rs
+index 2cbdeb451..d8658facf 100644
+--- a/helix-term/src/commands.rs
++++ b/helix-term/src/commands.rs
+@@ -44,6 +44,7 @@
+ use helix_view::{
+     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
+     editor::Action,
++    icons::ICONS,
+     info::Info,
+     input::KeyEvent,
+     keyboard::KeyCode,
+@@ -3182,11 +3183,32 @@ struct BufferMeta {
+                 .path
+                 .as_deref()
+                 .map(helix_stdx::path::get_relative_path);
+-            path.as_deref()
++
++            let name = path
++                .as_deref()
+                 .and_then(Path::to_str)
+-                .unwrap_or(SCRATCH_BUFFER_NAME)
+-                .to_string()
+-                .into()
++                .unwrap_or(SCRATCH_BUFFER_NAME);
++            let icons = ICONS.load();
++
++            let mut spans = Vec::with_capacity(2);
++
++            if let Some(icon) = icons
++                .mime()
++                .get(path.as_ref().map(|path| path.to_path_buf()).as_ref(), None)
++            {
++                if let Some(color) = icon.color() {
++                    spans.push(Span::styled(
++                        format!("{}  ", icon.glyph()),
++                        Style::default().fg(color),
++                    ));
++                } else {
++                    spans.push(Span::raw(format!("{}  ", icon.glyph())));
++                }
++            }
++
++            spans.push(Span::raw(name.to_string()));
++
++            Spans::from(spans).into()
+         }),
+     ];
+     let picker = Picker::new(columns, 2, items, (), |cx, meta, action| {
+@@ -3245,11 +3267,32 @@ struct JumpMeta {
+                 .path
+                 .as_deref()
+                 .map(helix_stdx::path::get_relative_path);
+-            path.as_deref()
++
++            let name = path
++                .as_deref()
+                 .and_then(Path::to_str)
+-                .unwrap_or(SCRATCH_BUFFER_NAME)
+-                .to_string()
+-                .into()
++                .unwrap_or(SCRATCH_BUFFER_NAME);
++            let icons = ICONS.load();
++
++            let mut spans = Vec::with_capacity(2);
++
++            if let Some(icon) = icons
++                .mime()
++                .get(path.as_ref().map(|path| path.to_path_buf()).as_ref(), None)
++            {
++                if let Some(color) = icon.color() {
++                    spans.push(Span::styled(
++                        format!("{}  ", icon.glyph()),
++                        Style::default().fg(color),
++                    ));
++                } else {
++                    spans.push(Span::raw(format!("{}  ", icon.glyph())));
++                }
++            }
++
++            spans.push(Span::raw(name.to_string()));
++
++            Spans::from(spans).into()
+         }),
+         ui::PickerColumn::new("flags", |item: &JumpMeta, _| {
+             let mut flags = Vec::new();
+@@ -3319,12 +3362,28 @@ pub struct FileChangeData {
+ 
+     let columns = [
+         PickerColumn::new("change", |change: &FileChange, data: &FileChangeData| {
++            let icons = ICONS.load();
+             match change {
+-                FileChange::Untracked { .. } => Span::styled("+ untracked", data.style_untracked),
+-                FileChange::Modified { .. } => Span::styled("~ modified", data.style_modified),
+-                FileChange::Conflict { .. } => Span::styled("x conflict", data.style_conflict),
+-                FileChange::Deleted { .. } => Span::styled("- deleted", data.style_deleted),
+-                FileChange::Renamed { .. } => Span::styled("> renamed", data.style_renamed),
++                FileChange::Untracked { .. } => Span::styled(
++                    format!("{}  untracked", icons.vcs().added()),
++                    data.style_untracked,
++                ),
++                FileChange::Modified { .. } => Span::styled(
++                    format!("{}  modified", icons.vcs().modified()),
++                    data.style_modified,
++                ),
++                FileChange::Conflict { .. } => Span::styled(
++                    format!("{}  conflict", icons.vcs().conflict()),
++                    data.style_conflict,
++                ),
++                FileChange::Deleted { .. } => Span::styled(
++                    format!("{}  deleted", icons.vcs().removed()),
++                    data.style_deleted,
++                ),
++                FileChange::Renamed { .. } => Span::styled(
++                    format!("{}  renamed", icons.vcs().renamed()),
++                    data.style_renamed,
++                ),
+             }
+             .into()
+         }),
+diff --git a/helix-term/src/commands/lsp.rs b/helix-term/src/commands/lsp.rs
+index a6d4b424d..9ee5696d3 100644
+--- a/helix-term/src/commands/lsp.rs
++++ b/helix-term/src/commands/lsp.rs
+@@ -22,6 +22,7 @@
+     document::{DocumentInlayHints, DocumentInlayHintsId},
+     editor::Action,
+     handlers::lsp::SignatureHelpInvoked,
++    icons::ICONS,
+     theme::Style,
+     Document, View,
+ };
+@@ -182,7 +183,7 @@ fn display_symbol_kind(kind: lsp::SymbolKind) -> &'static str {
+         lsp::SymbolKind::OBJECT => "object",
+         lsp::SymbolKind::KEY => "key",
+         lsp::SymbolKind::NULL => "null",
+-        lsp::SymbolKind::ENUM_MEMBER => "enummem",
++        lsp::SymbolKind::ENUM_MEMBER => "enum_member",
+         lsp::SymbolKind::STRUCT => "struct",
+         lsp::SymbolKind::EVENT => "event",
+         lsp::SymbolKind::OPERATOR => "operator",
+@@ -242,11 +243,22 @@ fn diag_picker(
+         ui::PickerColumn::new(
+             "severity",
+             |item: &PickerDiagnostic, styles: &DiagnosticStyles| {
++                let icons = ICONS.load();
+                 match item.diag.severity {
+-                    Some(DiagnosticSeverity::HINT) => Span::styled("HINT", styles.hint),
+-                    Some(DiagnosticSeverity::INFORMATION) => Span::styled("INFO", styles.info),
+-                    Some(DiagnosticSeverity::WARNING) => Span::styled("WARN", styles.warning),
+-                    Some(DiagnosticSeverity::ERROR) => Span::styled("ERROR", styles.error),
++                    Some(DiagnosticSeverity::HINT) => {
++                        Span::styled(format!("{} HINT", icons.diagnostic().hint()), styles.hint)
++                    }
++                    Some(DiagnosticSeverity::INFORMATION) => {
++                        Span::styled(format!("{} INFO", icons.diagnostic().info()), styles.info)
++                    }
++                    Some(DiagnosticSeverity::WARNING) => Span::styled(
++                        format!("{} WARN", icons.diagnostic().warning()),
++                        styles.warning,
++                    ),
++                    Some(DiagnosticSeverity::ERROR) => Span::styled(
++                        format!("{} ERROR", icons.diagnostic().error()),
++                        styles.error,
++                    ),
+                     _ => Span::raw(""),
+                 }
+                 .into()
+@@ -400,7 +412,22 @@ fn nested_to_flat(
+         let call = move |_editor: &mut Editor, compositor: &mut Compositor| {
+             let columns = [
+                 ui::PickerColumn::new("kind", |item: &SymbolInformationItem, _| {
+-                    display_symbol_kind(item.symbol.kind).into()
++                    let icons = ICONS.load();
++                    let name = display_symbol_kind(item.symbol.kind);
++
++                    if let Some(icon) = icons.kind().get(name) {
++                        if let Some(color) = icon.color() {
++                            Span::styled(
++                                format!("{}  {name}", icon.glyph()),
++                                Style::default().fg(color),
++                            )
++                            .into()
++                        } else {
++                            format!("{}  {name}", icon.glyph()).into()
++                        }
++                    } else {
++                        name.into()
++                    }
+                 }),
+                 // Some symbols in the document symbol picker may have a URI that isn't
+                 // the current file. It should be rare though, so we concatenate that
+@@ -518,7 +545,22 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
+     };
+     let columns = [
+         ui::PickerColumn::new("kind", |item: &SymbolInformationItem, _| {
+-            display_symbol_kind(item.symbol.kind).into()
++            let icons = ICONS.load();
++            let name = display_symbol_kind(item.symbol.kind);
++
++            if let Some(icon) = icons.kind().get(name) {
++                if let Some(color) = icon.color() {
++                    Span::styled(
++                        format!("{}  {name}", icon.glyph()),
++                        Style::default().fg(color),
++                    )
++                    .into()
++                } else {
++                    format!("{}  {name}", icon.glyph()).into()
++                }
++            } else {
++                name.into()
++            }
+         }),
+         ui::PickerColumn::new("name", |item: &SymbolInformationItem, _| {
+             item.symbol.name.as_str().into()
+diff --git a/helix-term/src/config.rs b/helix-term/src/config.rs
+index bcba8d8e1..615b95ddc 100644
+--- a/helix-term/src/config.rs
++++ b/helix-term/src/config.rs
+@@ -2,11 +2,13 @@
+ use crate::keymap::{merge_keys, KeyTrie};
+ use helix_loader::merge_toml_values;
+ use helix_view::document::Mode;
++use helix_view::icons::{Icons, ICONS};
+ use serde::Deserialize;
+ use std::collections::HashMap;
+ use std::fmt::Display;
+ use std::fs;
+ use std::io::Error as IOError;
++use std::sync::Arc;
+ use toml::de::Error as TomlError;
+ 
+ #[derive(Debug, Clone, PartialEq)]
+@@ -22,6 +24,7 @@ pub struct ConfigRaw {
+     pub theme: Option<String>,
+     pub keys: Option<HashMap<Mode, KeyTrie>>,
+     pub editor: Option<toml::Value>,
++    pub icons: Option<toml::Value>,
+ }
+ 
+ impl Default for Config {
+@@ -64,6 +67,7 @@ pub fn load(
+             global.and_then(|file| toml::from_str(&file).map_err(ConfigLoadError::BadConfig));
+         let local_config: Result<ConfigRaw, ConfigLoadError> =
+             local.and_then(|file| toml::from_str(&file).map_err(ConfigLoadError::BadConfig));
++
+         let res = match (global_config, local_config) {
+             (Ok(global), Ok(local)) => {
+                 let mut keys = keymap::default();
+@@ -84,6 +88,18 @@ pub fn load(
+                         .map_err(ConfigLoadError::BadConfig)?,
+                 };
+ 
++                let icons: Icons = match (global.icons, local.icons) {
++                    (None, None) => Icons::default(),
++                    (None, Some(val)) | (Some(val), None) => {
++                        val.try_into().map_err(ConfigLoadError::BadConfig)?
++                    }
++                    (Some(global), Some(local)) => merge_toml_values(global, local, 3)
++                        .try_into()
++                        .map_err(ConfigLoadError::BadConfig)?,
++                };
++
++                ICONS.store(Arc::new(icons));
++
+                 Config {
+                     theme: local.theme.or(global.theme),
+                     keys,
+@@ -100,6 +116,14 @@ pub fn load(
+                 if let Some(keymap) = config.keys {
+                     merge_keys(&mut keys, keymap);
+                 }
++
++                let icons = config.icons.map_or_else(
++                    || Ok(Icons::default()),
++                    |val| val.try_into().map_err(ConfigLoadError::BadConfig),
++                )?;
++
++                ICONS.store(Arc::new(icons));
++
+                 Config {
+                     theme: config.theme,
+                     keys,
+diff --git a/helix-term/src/handlers/document_colors.rs b/helix-term/src/handlers/document_colors.rs
+index 7813f317e..1968266f8 100644
+--- a/helix-term/src/handlers/document_colors.rs
++++ b/helix-term/src/handlers/document_colors.rs
+@@ -8,6 +8,7 @@
+     document::DocumentColorSwatches,
+     events::{DocumentDidChange, DocumentDidOpen, LanguageServerExited, LanguageServerInitialized},
+     handlers::{lsp::DocumentColorsEvent, Handlers},
++    icons::ICONS,
+     DocumentId, Editor, Theme,
+ };
+ use tokio::time::Instant;
+@@ -124,9 +125,11 @@ fn attach_document_colors(
+     let mut color_swatches_padding = Vec::with_capacity(doc_colors.len());
+     let mut colors = Vec::with_capacity(doc_colors.len());
+ 
++    let icons = ICONS.load();
++
+     for (pos, color) in doc_colors {
+         color_swatches_padding.push(InlineAnnotation::new(pos, " "));
+-        color_swatches.push(InlineAnnotation::new(pos, "■"));
++        color_swatches.push(InlineAnnotation::new(pos, icons.kind().color().glyph()));
+         colors.push(Theme::rgb_highlight(
+             (color.red * 255.) as u8,
+             (color.green * 255.) as u8,
+diff --git a/helix-term/src/ui/completion.rs b/helix-term/src/ui/completion.rs
+index cb980b961..6849870c0 100644
+--- a/helix-term/src/ui/completion.rs
++++ b/helix-term/src/ui/completion.rs
+@@ -9,6 +9,7 @@
+ use helix_core::snippets::{ActiveSnippet, RenderedSnippet, Snippet};
+ use helix_core::{self as core, chars, fuzzy::MATCHER, Change, Transaction};
+ use helix_lsp::{lsp, util, OffsetEncoding};
++use helix_view::icons::ICONS;
+ use helix_view::{
+     editor::CompleteAction,
+     handlers::lsp::SignatureHelpInvoked,
+@@ -48,7 +49,7 @@ fn format(&self, dir_style: &Self::Data) -> menu::Row {
+             CompletionItem::Other(core::CompletionItem { label, .. }) => label,
+         };
+ 
+-        let kind = match self {
++        let mut kind = match self {
+             CompletionItem::Lsp(LspCompletionItem { item, .. }) => match item.kind {
+                 Some(lsp::CompletionItemKind::TEXT) => "text".into(),
+                 Some(lsp::CompletionItemKind::METHOD) => "method".into(),
+@@ -81,9 +82,13 @@ fn format(&self, dir_style: &Self::Data) -> menu::Row {
+                     })
+                     .and_then(Color::from_hex)
+                     .map_or("color".into(), |color| {
++                        let icons = ICONS.load();
+                         Spans::from(vec![
+                             Span::raw("color "),
+-                            Span::styled("■", Style::default().fg(color)),
++                            Span::styled(
++                                icons.kind().color().glyph().to_string(),
++                                Style::default().fg(color),
++                            ),
+                         ])
+                     }),
+                 Some(lsp::CompletionItemKind::FILE) => "file".into(),
+@@ -104,11 +109,28 @@ fn format(&self, dir_style: &Self::Data) -> menu::Row {
+             CompletionItem::Other(core::CompletionItem { kind, .. }) => kind.as_ref().into(),
+         };
+ 
++        let icons = ICONS.load();
++        let name = &kind.0[0].content;
++
++        let is_folder = kind.0[0].content == "folder";
++
++        if let Some(icon) = icons.kind().get(name) {
++            kind.0[0].content = format!("{}  {name}", icon.glyph()).into();
++
++            if let Some(color) = icon.color() {
++                kind.0[0].style = Style::default().fg(color);
++            } else if is_folder {
++                kind.0[0].style = *dir_style;
++            }
++        } else {
++            kind.0[0].content = format!("{name}").into();
++        }
++
+         let label = Span::styled(
+             label,
+             if deprecated {
+                 Style::default().add_modifier(Modifier::CROSSED_OUT)
+-            } else if kind.0[0].content == "folder" {
++            } else if is_folder {
+                 *dir_style
+             } else {
+                 Style::default()
+diff --git a/helix-term/src/ui/editor.rs b/helix-term/src/ui/editor.rs
+index 788ab3d04..1521ca7ea 100644
+--- a/helix-term/src/ui/editor.rs
++++ b/helix-term/src/ui/editor.rs
+@@ -28,6 +28,7 @@
+     document::{Mode, SCRATCH_BUFFER_NAME},
+     editor::{CompleteAction, CursorShapeConfig},
+     graphics::{Color, CursorKind, Modifier, Rect, Style},
++    icons::ICONS,
+     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
+     keyboard::{KeyCode, KeyModifiers},
+     Document, Editor, Theme, View,
+@@ -865,7 +866,19 @@ pub fn render_bufferline(editor: &Editor, viewport: Rect, surface: &mut Surface)
+                 bufferline_inactive
+             };
+ 
+-            let text = format!(" {}{} ", fname, if doc.is_modified() { "[+]" } else { "" });
++            let icons = ICONS.load();
++
++            let text = if let Some(icon) = icons.mime().get(doc.path(), doc.language_name()) {
++                format!(
++                    " {}  {} {}",
++                    icon.glyph(),
++                    fname,
++                    if doc.is_modified() { "[+] " } else { "" }
++                )
++            } else {
++                format!(" {} {}", fname, if doc.is_modified() { "[+] " } else { "" })
++            };
++
+             let used_width = viewport.x.saturating_sub(x);
+             let rem_width = surface.area.width.saturating_sub(used_width);
+ 
+diff --git a/helix-term/src/ui/mod.rs b/helix-term/src/ui/mod.rs
+index a5da232c2..147280cf4 100644
+--- a/helix-term/src/ui/mod.rs
++++ b/helix-term/src/ui/mod.rs
+@@ -20,6 +20,7 @@
+ pub use completion::Completion;
+ pub use editor::EditorView;
+ use helix_stdx::rope;
++use helix_view::icons::ICONS;
+ use helix_view::theme::Style;
+ pub use markdown::Markdown;
+ pub use menu::Menu;
+@@ -267,7 +268,21 @@ pub fn file_picker(editor: &Editor, root: PathBuf) -> FilePicker {
+         get_relative_dir(&root),
+         |item: &PathBuf, data: &FilePickerData| {
+             let path = item.strip_prefix(&data.root).unwrap_or(item);
+-            let mut spans = Vec::with_capacity(3);
++            let mut spans = Vec::with_capacity(4);
++
++            let icons = ICONS.load();
++
++            if let Some(icon) = icons.mime().get(Some(&path.to_path_buf()), None) {
++                if let Some(color) = icon.color() {
++                    spans.push(Span::styled(
++                        format!("{}  ", icon.glyph()),
++                        Style::default().fg(color),
++                    ));
++                } else {
++                    spans.push(Span::raw(format!("{}  ", icon.glyph())));
++                }
++            }
++
+             if let Some(dirs) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                 spans.extend([
+                     Span::styled(dirs.to_string_lossy(), data.directory_style),
+@@ -329,8 +344,27 @@ pub fn file_explorer(root: PathBuf, editor: &Editor) -> Result<FileExplorer, std
+         get_relative_dir(&root),
+         |(path, is_dir): &(PathBuf, bool), (root, directory_style): &(PathBuf, Style)| {
+             let name = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
++            let icons = ICONS.load();
+             if *is_dir {
+-                Span::styled(format!("{}/", name), *directory_style).into()
++                if let Some(icon) = icons.mime().directory() {
++                    Span::styled(format!("{icon}  {name}/"), *directory_style).into()
++                } else {
++                    Span::styled(format!("{name}/"), *directory_style).into()
++                }
++            } else if let Some(icon) = icons.mime().get(Some(path), None).cloned() {
++                let mut spans = Vec::with_capacity(2);
++                if let Some(color) = icon.color() {
++                    let icon =
++                        Span::styled(format!("{}  ", icon.glyph()), Style::default().fg(color));
++                    let filename = Span::raw(name);
++
++                    spans.push(icon);
++                    spans.push(filename);
++                } else {
++                    spans.push(Span::raw(format!("{}  ", icon.glyph())));
++                    spans.push(Span::raw(name));
++                }
++                Spans::from(spans).into()
+             } else {
+                 name.into()
+             }
+diff --git a/helix-term/src/ui/statusline.rs b/helix-term/src/ui/statusline.rs
+index f08179ab6..376e8560c 100644
+--- a/helix-term/src/ui/statusline.rs
++++ b/helix-term/src/ui/statusline.rs
+@@ -4,6 +4,7 @@
+ use helix_core::{coords_at_pos, encoding, Position};
+ use helix_lsp::lsp::DiagnosticSeverity;
+ use helix_view::document::DEFAULT_LANGUAGE_NAME;
++use helix_view::icons::ICONS;
+ use helix_view::{
+     document::{Mode, SCRATCH_BUFFER_NAME},
+     graphics::Rect,
+@@ -253,29 +254,48 @@ fn render_diagnostics<'a, F>(context: &mut RenderContext<'a>, write: F)
+                 counts
+             });
+ 
++    let icons = ICONS.load();
+     for sev in &context.editor.config().statusline.diagnostics {
+         match sev {
+             Severity::Hint if hints > 0 => {
+-                write(context, Span::styled("●", context.editor.theme.get("hint")));
+-                write(context, format!(" {} ", hints).into());
++                write(
++                    context,
++                    Span::styled(
++                        icons.diagnostic().hint().to_string(),
++                        context.editor.theme.get("hint"),
++                    ),
++                );
++                write(context, Span::raw(format!(" {hints} ")));
+             }
+             Severity::Info if info > 0 => {
+-                write(context, Span::styled("●", context.editor.theme.get("info")));
+-                write(context, format!(" {} ", info).into());
++                write(
++                    context,
++                    Span::styled(
++                        icons.diagnostic().info().to_string(),
++                        context.editor.theme.get("info"),
++                    ),
++                );
++                write(context, Span::raw(format!(" {info} ")));
+             }
+             Severity::Warning if warnings > 0 => {
+                 write(
+                     context,
+-                    Span::styled("●", context.editor.theme.get("warning")),
++                    Span::styled(
++                        icons.diagnostic().warning().to_string(),
++                        context.editor.theme.get("warning"),
++                    ),
+                 );
+-                write(context, format!(" {} ", warnings).into());
++                write(context, Span::raw(format!(" {warnings} ")));
+             }
+             Severity::Error if errors > 0 => {
+                 write(
+                     context,
+-                    Span::styled("●", context.editor.theme.get("error")),
++                    Span::styled(
++                        icons.diagnostic().error().to_string(),
++                        context.editor.theme.get("error"),
++                    ),
+                 );
+-                write(context, format!(" {} ", errors).into());
++                write(context, Span::raw(format!(" {errors} ")));
+             }
+             _ => {}
+         }
+@@ -306,10 +326,10 @@ fn render_workspace_diagnostics<'a, F>(context: &mut RenderContext<'a>, write: F
+         },
+     );
+ 
+-    let sevs_to_show = &context.editor.config().statusline.workspace_diagnostics;
++    let sevs = &context.editor.config().statusline.workspace_diagnostics;
+ 
+-    // Avoid showing the " W " if no diagnostic counts will be shown.
+-    if !sevs_to_show.iter().any(|sev| match sev {
++    // Avoid showing the ` W ` if no diagnostic counts will be shown.
++    if !sevs.iter().any(|sev| match sev {
+         Severity::Hint => hints != 0,
+         Severity::Info => info != 0,
+         Severity::Warning => warnings != 0,
+@@ -318,31 +338,66 @@ fn render_workspace_diagnostics<'a, F>(context: &mut RenderContext<'a>, write: F
+         return;
+     }
+ 
+-    write(context, " W ".into());
++    let icons = ICONS.load();
++    let icon = icons.kind().workspace();
++
++    // NOTE: Special case when the `workspace` key is set to `""`:
++    //
++    // ```
++    // [icons.kind]
++    // workspace = ""
++    // ```
++    //
++    // This will remove the default ` W ` so that the rest of the icons are spaced correctly.
++    if !icon.glyph().is_empty() {
++        if let Some(style) = icon.color().map(|color| Style::default().fg(color)) {
++            write(context, Span::styled(format!("{} ", icon.glyph()), style));
++        } else {
++            write(context, format!("{} ", icon.glyph()).into());
++        }
++    }
+ 
+-    for sev in sevs_to_show {
++    for sev in sevs {
+         match sev {
+             Severity::Hint if hints > 0 => {
+-                write(context, Span::styled("●", context.editor.theme.get("hint")));
+-                write(context, format!(" {} ", hints).into());
++                write(
++                    context,
++                    Span::styled(
++                        icons.diagnostic().hint().to_string(),
++                        context.editor.theme.get("hint"),
++                    ),
++                );
++                write(context, Span::raw(format!(" {hints} ")));
+             }
+             Severity::Info if info > 0 => {
+-                write(context, Span::styled("●", context.editor.theme.get("info")));
+-                write(context, format!(" {} ", info).into());
++                write(
++                    context,
++                    Span::styled(
++                        format!(" {} ", icons.diagnostic().info()),
++                        context.editor.theme.get("info"),
++                    ),
++                );
++                write(context, Span::raw(format!(" {info} ")));
+             }
+             Severity::Warning if warnings > 0 => {
+                 write(
+                     context,
+-                    Span::styled("●", context.editor.theme.get("warning")),
++                    Span::styled(
++                        icons.diagnostic().warning().to_string(),
++                        context.editor.theme.get("warning"),
++                    ),
+                 );
+-                write(context, format!(" {} ", warnings).into());
++                write(context, Span::raw(format!(" {warnings} ")));
+             }
+             Severity::Error if errors > 0 => {
+                 write(
+                     context,
+-                    Span::styled("●", context.editor.theme.get("error")),
++                    Span::styled(
++                        icons.diagnostic().error().to_string(),
++                        context.editor.theme.get("error"),
++                    ),
+                 );
+-                write(context, format!(" {} ", errors).into());
++                write(context, Span::raw(format!(" {errors} ")));
+             }
+             _ => {}
+         }
+@@ -461,7 +516,17 @@ fn render_file_type<'a, F>(context: &mut RenderContext<'a>, write: F)
+ {
+     let file_type = context.doc.language_name().unwrap_or(DEFAULT_LANGUAGE_NAME);
+ 
+-    write(context, format!(" {} ", file_type).into());
++    let icons = ICONS.load();
++
++    if let Some(icon) = icons.mime().get(context.doc.path(), Some(file_type)) {
++        if let Some(style) = icon.color().map(|color| Style::default().fg(color)) {
++            write(context, Span::styled(format!(" {} ", icon.glyph()), style));
++        } else {
++            write(context, format!(" {} ", icon.glyph()).into());
++        }
++    } else {
++        write(context, format!(" {} ", file_type).into());
++    }
+ }
+ 
+ fn render_file_name<'a, F>(context: &mut RenderContext<'a>, write: F)
+@@ -553,13 +618,18 @@ fn render_version_control<'a, F>(context: &mut RenderContext<'a>, write: F)
+ where
+     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+ {
+-    let head = context
+-        .doc
+-        .version_control_head()
+-        .unwrap_or_default()
+-        .to_string();
++    let head = context.doc.version_control_head().unwrap_or_default();
++
++    let icons = ICONS.load();
++    let icon = icons.vcs().branch();
++
++    let vcs = if icon.is_empty() {
++        format!(" {head} ")
++    } else {
++        format!(" {icon} {head} ")
++    };
+ 
+-    write(context, head.into());
++    write(context, vcs.into());
+ }
+ 
+ fn render_register<'a, F>(context: &mut RenderContext<'a>, write: F)
+diff --git a/helix-term/src/ui/text_decorations/diagnostics.rs b/helix-term/src/ui/text_decorations/diagnostics.rs
+index 84f6c6803..8e0cee6ed 100644
+--- a/helix-term/src/ui/text_decorations/diagnostics.rs
++++ b/helix-term/src/ui/text_decorations/diagnostics.rs
+@@ -9,6 +9,7 @@
+     DiagnosticFilter, InlineDiagnosticAccumulator, InlineDiagnosticsConfig,
+ };
+ 
++use helix_view::icons::ICONS;
+ use helix_view::theme::Style;
+ use helix_view::{Document, Theme};
+ 
+@@ -102,6 +103,24 @@ fn draw_eol_diagnostic(&mut self, diag: &Diagnostic, row: u16, col: usize) -> u1
+         let mut end_col = start_col;
+         let mut draw_col = (col + 1) as u16;
+ 
++        // Draw the diagnostic indicator:
++        if !self.renderer.column_in_bounds(draw_col as usize, 2) {
++            return 0;
++        }
++
++        let icons = ICONS.load();
++
++        let symbol = match diag.severity() {
++            Severity::Hint => icons.diagnostic().hint(),
++            Severity::Info => icons.diagnostic().info(),
++            Severity::Warning => icons.diagnostic().warning(),
++            Severity::Error => icons.diagnostic().error(),
++        };
++
++        self.renderer
++            .set_string(self.renderer.viewport.x + draw_col, row, symbol, style);
++        draw_col += 2;
++
+         for line in diag.message.lines() {
+             if !self.renderer.column_in_bounds(draw_col as usize, 1) {
+                 break;
+diff --git a/helix-view/Cargo.toml b/helix-view/Cargo.toml
+index 22928cfa0..afbc65990 100644
+--- a/helix-view/Cargo.toml
++++ b/helix-view/Cargo.toml
+@@ -53,6 +53,7 @@ parking_lot.workspace = true
+ thiserror.workspace = true
+ 
+ kstring = "2.0"
++smartstring = { version = "1.0.1", features = ["serde"]}
+ 
+ [target.'cfg(windows)'.dependencies]
+ clipboard-win = { version = "5.4", features = ["std"] }
+diff --git a/helix-view/src/gutter.rs b/helix-view/src/gutter.rs
+index c2cbc0da5..5e73ef04c 100644
+--- a/helix-view/src/gutter.rs
++++ b/helix-view/src/gutter.rs
+@@ -5,6 +5,7 @@
+ use crate::{
+     editor::GutterType,
+     graphics::{Style, UnderlineStyle},
++    icons::ICONS,
+     Document, Editor, Theme, View,
+ };
+ 
+@@ -46,7 +47,6 @@ pub fn width(self, view: &View, doc: &Document) -> usize {
+ }
+ 
+ pub fn diagnostic<'doc>(
+-    _editor: &'doc Editor,
+     doc: &'doc Document,
+     _view: &View,
+     theme: &Theme,
+@@ -74,15 +74,20 @@ pub fn diagnostic<'doc>(
+                                 .any(|ls| ls.id() == id)
+                         })
+                 });
+-            diagnostics_on_line.max_by_key(|d| d.severity).map(|d| {
+-                write!(out, "●").ok();
+-                match d.severity {
+-                    Some(Severity::Error) => error,
+-                    Some(Severity::Warning) | None => warning,
+-                    Some(Severity::Info) => info,
+-                    Some(Severity::Hint) => hint,
+-                }
+-            })
++
++            diagnostics_on_line
++                .max_by_key(|d| d.severity)
++                .map(move |d| {
++                    let icons = ICONS.load();
++                    let (style, symbol) = match d.severity {
++                        Some(Severity::Error) => (error, icons.diagnostic().error()),
++                        Some(Severity::Warning) | None => (warning, icons.diagnostic().warning()),
++                        Some(Severity::Info) => (info, icons.diagnostic().info()),
++                        Some(Severity::Hint) => (hint, icons.diagnostic().hint()),
++                    };
++                    out.push_str(symbol);
++                    style
++                })
+         },
+     )
+ }
+@@ -119,15 +124,17 @@ pub fn diff<'doc>(
+                     return None;
+                 }
+ 
++                let icons = ICONS.load();
++
+                 let (icon, style) = if hunk.is_pure_insertion() {
+-                    ("▍", added)
++                    (icons.gutter().added(), added)
+                 } else if hunk.is_pure_removal() {
+                     if !first_visual_line {
+                         return None;
+                     }
+-                    ("▔", deleted)
++                    (icons.gutter().deleted(), deleted)
+                 } else {
+-                    ("▍", modified)
++                    (icons.gutter().modified(), modified)
+                 };
+ 
+                 write!(out, "{}", icon).unwrap();
+@@ -264,7 +271,13 @@ pub fn breakpoints<'doc>(
+                 breakpoint_style
+             };
+ 
+-            let sym = if breakpoint.verified { "●" } else { "◯" };
++            let icons = ICONS.load();
++
++            let sym = if breakpoint.verified {
++                icons.dap().verified()
++            } else {
++                icons.dap().unverified()
++            };
+             write!(out, "{}", sym).unwrap();
+             Some(style)
+         },
+@@ -313,7 +326,7 @@ pub fn diagnostics_or_breakpoints<'doc>(
+     theme: &Theme,
+     is_focused: bool,
+ ) -> GutterFn<'doc> {
+-    let mut diagnostics = diagnostic(editor, doc, view, theme, is_focused);
++    let mut diagnostics = diagnostic(doc, view, theme, is_focused);
+     let mut breakpoints = breakpoints(editor, doc, view, theme, is_focused);
+     let mut execution_pause_indicator = execution_pause_indicator(editor, doc, theme, is_focused);
+ 
+diff --git a/helix-view/src/icons.rs b/helix-view/src/icons.rs
+new file mode 100644
+index 000000000..c2910483f
+--- /dev/null
++++ b/helix-view/src/icons.rs
+@@ -0,0 +1,1054 @@
++use arc_swap::ArcSwap;
++use once_cell::sync::Lazy;
++use serde::{Deserialize, Serialize};
++use std::{collections::HashMap, path::PathBuf};
++
++use smartstring::{LazyCompact, SmartString};
++
++use crate::theme::Color;
++
++type String = SmartString<LazyCompact>;
++
++pub static ICONS: Lazy<ArcSwap<Icons>> = Lazy::new(ArcSwap::default);
++
++/// Centralized location for icons that can be used throughout the UI.
++#[derive(Debug, Default, Deserialize, PartialEq, Eq, Clone)]
++#[serde(default, deny_unknown_fields)]
++pub struct Icons {
++    mime: Mime,
++    kind: Kind,
++    diagnostic: Diagnostic,
++    vcs: Vcs,
++    dap: Dap,
++    gutter: Gutter,
++}
++
++impl Icons {
++    #[inline]
++    pub fn mime(&self) -> &Mime {
++        &self.mime
++    }
++
++    #[inline]
++    pub fn kind(&self) -> &Kind {
++        &self.kind
++    }
++
++    #[inline]
++    pub fn diagnostic(&self) -> &Diagnostic {
++        &self.diagnostic
++    }
++
++    #[inline]
++    pub fn vcs(&self) -> &Vcs {
++        &self.vcs
++    }
++
++    #[inline]
++    pub fn dap(&self) -> &Dap {
++        &self.dap
++    }
++
++    #[inline]
++    pub fn gutter(&self) -> &Gutter {
++        &self.gutter
++    }
++}
++
++#[derive(Debug, Deserialize, Default, PartialEq, Eq, Clone)]
++pub struct Kind {
++    enabled: bool,
++
++    file: Option<Icon>,
++    folder: Option<Icon>,
++    text: Option<Icon>,
++    module: Option<Icon>,
++    namespace: Option<Icon>,
++    package: Option<Icon>,
++    class: Option<Icon>,
++    method: Option<Icon>,
++    property: Option<Icon>,
++    field: Option<Icon>,
++    constructor: Option<Icon>,
++    #[serde(rename = "enum")]
++    r#enum: Option<Icon>,
++    interface: Option<Icon>,
++    function: Option<Icon>,
++    variable: Option<Icon>,
++    constant: Option<Icon>,
++    string: Option<Icon>,
++    number: Option<Icon>,
++    boolean: Option<Icon>,
++    array: Option<Icon>,
++    object: Option<Icon>,
++    key: Option<Icon>,
++    null: Option<Icon>,
++    enum_member: Option<Icon>,
++    #[serde(rename = "struct")]
++    r#struct: Option<Icon>,
++    event: Option<Icon>,
++    operator: Option<Icon>,
++    type_parameter: Option<Icon>,
++    color: Option<Icon>,
++    keyword: Option<Icon>,
++    value: Option<Icon>,
++    snippet: Option<Icon>,
++    reference: Option<Icon>,
++    unit: Option<Icon>,
++
++    // TODO: See what becomes of the word completion PR and its `word` completion kind.
++    word: Option<Icon>,
++
++    spellcheck: Option<Icon>,
++
++    // WIP: Might end up in `diagnostics`.
++    // For workspace indicator for `workspace-diagnostics` status-line.
++    workspace: Option<Icon>,
++}
++
++impl Kind {
++    #[inline]
++    #[must_use]
++    pub fn get(&self, kind: &str) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++
++        let icon = match kind {
++            "file" => self.file()?,
++            "folder" => self.folder()?,
++            "module" => self.module()?,
++            "namespace" => self.namespace()?,
++            "package" => self.package()?,
++            "class" => self.class()?,
++            "method" => self.method()?,
++            "property" => self.property()?,
++            "field" => self.field()?,
++            "construct" => self.constructor()?,
++            "enum" => self.r#enum()?,
++            "interface" => self.interface()?,
++            "function" => self.function()?,
++            "variable" => self.variable()?,
++            "constant" => self.constant()?,
++            "string" => self.string()?,
++            "number" => self.number()?,
++            "boolean" => self.boolean()?,
++            "array" => self.array()?,
++            "object" => self.object()?,
++            "key" => self.key()?,
++            "null" => self.null()?,
++            "enum_member" => self.enum_member()?,
++            "struct" => self.r#struct()?,
++            "event" => self.event()?,
++            "operator" => self.operator()?,
++            "typeparam" => self.type_parameter()?,
++            "color" => self.color(),
++            "keyword" => self.keyword()?,
++            "value" => self.value()?,
++            "snippet" => self.snippet()?,
++            "reference" => self.reference()?,
++            "text" => self.text()?,
++            "unit" => self.unit()?,
++            "word" => self.word()?,
++            "spellcheck" => self.spellcheck()?,
++
++            _ => return None,
++        };
++
++        Some(icon)
++    }
++
++    #[inline]
++    pub fn file(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let file = self.file.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(file)
++    }
++
++    #[inline]
++    pub fn folder(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let folder = self.folder.clone().unwrap_or_else(|| Icon {
++            glyph: String::from("󰉋"),
++            color: None,
++        });
++        Some(folder)
++    }
++
++    #[inline]
++    pub fn module(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let module = self.module.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(module)
++    }
++
++    #[inline]
++    pub fn namespace(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let namespace = self.namespace.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(namespace)
++    }
++
++    #[inline]
++    pub fn package(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let package = self.package.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(package)
++    }
++
++    #[inline]
++    pub fn class(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let class = self.class.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(class)
++    }
++
++    #[inline]
++    pub fn method(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let method = self.method.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(method)
++    }
++
++    #[inline]
++    pub fn property(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let property = self.property.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(property)
++    }
++
++    #[inline]
++    pub fn field(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let field = self.field.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(field)
++    }
++
++    #[inline]
++    pub fn constructor(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let constructor = self.constructor.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(constructor)
++    }
++
++    #[inline]
++    pub fn r#enum(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let r#enum = self.r#enum.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(r#enum)
++    }
++
++    #[inline]
++    pub fn interface(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let interface = self.interface.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(interface)
++    }
++
++    #[inline]
++    pub fn function(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let function = self.function.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(function)
++    }
++
++    #[inline]
++    pub fn variable(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let variable = self.variable.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(variable)
++    }
++
++    #[inline]
++    pub fn constant(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let constant = self.constant.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(constant)
++    }
++
++    #[inline]
++    pub fn string(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let string = self.string.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(string)
++    }
++
++    #[inline]
++    pub fn number(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let number = self.number.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(number)
++    }
++
++    #[inline]
++    pub fn boolean(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let boolean = self.boolean.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(boolean)
++    }
++
++    #[inline]
++    pub fn array(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let array = self.array.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(array)
++    }
++
++    #[inline]
++    pub fn object(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let object = self.object.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(object)
++    }
++
++    #[inline]
++    pub fn key(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let key = self.key.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(key)
++    }
++
++    #[inline]
++    pub fn null(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let null = self.null.clone().unwrap_or_else(|| Icon {
++            glyph: String::from("󰟢"),
++            color: None,
++        });
++        Some(null)
++    }
++
++    #[inline]
++    pub fn enum_member(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let enum_member = self.enum_member.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(enum_member)
++    }
++
++    #[inline]
++    pub fn r#struct(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let r#struct = self.r#struct.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(r#struct)
++    }
++
++    #[inline]
++    pub fn event(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let event = self.event.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(event)
++    }
++
++    #[inline]
++    pub fn operator(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let operator = self.operator.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(operator)
++    }
++
++    #[inline]
++    pub fn type_parameter(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let type_parameter = self.type_parameter.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(type_parameter)
++    }
++
++    // Always enabled
++    #[inline]
++    pub fn color(&self) -> Icon {
++        self.color.clone().unwrap_or_else(|| Icon {
++            glyph: String::from("■"),
++            color: None,
++        })
++    }
++
++    #[inline]
++    pub fn keyword(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let keyword = self.keyword.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(keyword)
++    }
++
++    #[inline]
++    pub fn value(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let value = self.value.clone().unwrap_or_else(|| Icon {
++            glyph: String::from("󰎠"),
++            color: None,
++        });
++        Some(value)
++    }
++
++    #[inline]
++    pub fn snippet(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let snippet = self.snippet.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(snippet)
++    }
++
++    #[inline]
++    pub fn reference(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let reference = self.reference.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(reference)
++    }
++
++    #[inline]
++    pub fn text(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let text = self.text.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(text)
++    }
++
++    #[inline]
++    pub fn unit(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let unit = self.unit.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(unit)
++    }
++
++    #[inline]
++    pub fn word(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let word = self.word.clone().unwrap_or_else(|| Icon {
++            glyph: String::from(""),
++            color: None,
++        });
++        Some(word)
++    }
++
++    #[inline]
++    pub fn spellcheck(&self) -> Option<Icon> {
++        if !self.enabled {
++            return None;
++        }
++        let spellcheck = self.spellcheck.clone().unwrap_or_else(|| Icon {
++            glyph: String::from("󰓆"),
++            color: None,
++        });
++        Some(spellcheck)
++    }
++
++    /// Returns a workspace diagnostic icon.
++    ///
++    /// If no icon is set in the config, it will return `W` by default.
++    #[inline]
++    pub fn workspace(&self) -> Icon {
++        self.workspace.clone().unwrap_or_else(|| Icon {
++            glyph: String::from("W"),
++            color: None,
++        })
++    }
++}
++
++#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Default)]
++pub struct Diagnostic {
++    hint: Option<String>,
++    info: Option<String>,
++    warning: Option<String>,
++    error: Option<String>,
++}
++
++impl Diagnostic {
++    #[inline]
++    pub fn hint(&self) -> &str {
++        self.hint.as_ref().map_or("○", |hint| hint)
++    }
++
++    #[inline]
++    pub fn info(&self) -> &str {
++        self.info.as_ref().map_or("●", |info| info)
++    }
++
++    #[inline]
++    pub fn warning(&self) -> &str {
++        self.warning.as_ref().map_or("▲", |warning| warning)
++    }
++
++    #[inline]
++    pub fn error(&self) -> &str {
++        self.error.as_ref().map_or("■", |error| error)
++    }
++}
++
++#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Default)]
++pub struct Vcs {
++    enabled: bool,
++    branch: Option<String>,
++    added: Option<String>,
++    removed: Option<String>,
++    ignored: Option<String>,
++    modified: Option<String>,
++    renamed: Option<String>,
++    conflict: Option<String>,
++}
++
++impl Vcs {
++    #[inline]
++    pub fn branch(&self) -> &str {
++        if self.enabled {
++            return self.branch.as_ref().map_or("", |branch| branch.as_str());
++        }
++        ""
++    }
++
++    #[inline]
++    pub fn added(&self) -> &str {
++        if self.enabled {
++            return self.added.as_ref().map_or("", |added| added.as_str());
++        }
++        ""
++    }
++
++    #[inline]
++    pub fn removed(&self) -> &str {
++        if self.enabled {
++            return self
++                .removed
++                .as_ref()
++                .map_or("", |removed| removed.as_str());
++        }
++        ""
++    }
++
++    #[inline]
++    pub fn ignored(&self) -> &str {
++        if self.enabled {
++            return self
++                .ignored
++                .as_ref()
++                .map_or("", |ignored| ignored.as_str());
++        }
++        ""
++    }
++
++    #[inline]
++    pub fn modified(&self) -> &str {
++        if self.enabled {
++            return self
++                .modified
++                .as_ref()
++                .map_or("", |modified| modified.as_str());
++        }
++        ""
++    }
++
++    #[inline]
++    pub fn renamed(&self) -> &str {
++        if self.enabled {
++            return self
++                .renamed
++                .as_ref()
++                .map_or("", |renamed| renamed.as_str());
++        }
++        ""
++    }
++
++    #[inline]
++    pub fn conflict(&self) -> &str {
++        if self.enabled {
++            return self
++                .conflict
++                .as_ref()
++                .map_or("", |conflict| conflict.as_str());
++        }
++        ""
++    }
++}
++
++#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Default)]
++pub struct Mime {
++    enabled: bool,
++    directory: Option<String>,
++    #[serde(flatten)]
++    mime: HashMap<String, Icon>,
++}
++
++macro_rules! mimes {
++    ( $( $key:literal => { glyph: $glyph:expr $(, color: $color:expr)? } ),* $(,)? ) => {{
++        let mut map = HashMap::new();
++        $(
++            map.insert(String::from($key), Icon {
++                glyph: String::from($glyph),
++                color: None $(.or( Some(Color::from_hex($color).unwrap())) )?,
++            });
++        )*
++        map
++    }};
++}
++
++static MIMES: once_cell::sync::Lazy<HashMap<String, Icon>> = once_cell::sync::Lazy::new(|| {
++    mimes! {
++    // Language name
++        "git-commit" => {glyph: "", color: "#f15233" },
++        "git-rebase" => {glyph: "", color: "#f15233" },
++        "git-config" => {glyph: "", color: "#f15233" },
++        "helm" => {glyph: "", color: "#277a9f" },
++        "nginx" => {glyph: "", color: "#019639" },
++        "docker" => {glyph: "󰡨", color: "#0096e6" },
++        "docker-compose" => {glyph: "󰡨", color: "#0096e6" },
++        "text" => { glyph: "" },
++
++    // Exact
++        "README.md" => { glyph: "" },
++        "LICENSE" => { glyph: "󰗑", color: "#e7a933" },
++        "CHANGELOG.md" => { glyph: "", color: "#7bab43" },
++        ".gitignore" => { glyph: "", color: "#f15233" },
++        ".gitattributes" => { glyph: "", color: "#f15233" },
++        ".editorconfig" => { glyph: "" },
++        ".env" => { glyph: "" },
++        ".dockerignore" => {glyph: "󰡨", color: "#0096e6" },
++
++    // Extension
++        "rs" => {glyph: "󱘗", color: "#fab387" },
++        "py" => {glyph: "󰌠", color: "#ffd94a" },
++        "c" => {glyph: "", color: "#b0c4de" },
++        "cpp" => {glyph: "", color: "#0288d1" },
++        "cs" => {glyph: "", color: "#512bd4" },
++        "d" => {glyph: "", color: "#b03931" },
++        "ex" => {glyph: "", color: "#71567d" },
++        "fs" => {glyph: "", color: "#2fb9da" },
++        "go" => {glyph: "󰟓", color: "#00acd8" },
++        "hs" => {glyph: "󰲒", color: "#5e5089" },
++        "java" => {glyph: "󰬷", color: "#f58217" },
++        "js" => {glyph: "󰌞", color: "#f0dc4e" },
++        "ts" => {glyph: "󰛦", color: "#3179c7" },
++        "kt" => {glyph: "󱈙", color: "#8a48fc" },
++        "html" => {glyph: "󰌝", color: "#f15c29" },
++        "css" => {glyph: "󰌜", color: "#9479b6" },
++        "scss" => {glyph: "󰟬", color: "#d06599" },
++        "sh" => {glyph: "" },
++        "bash" => {glyph: "" },
++        "php" => {glyph: "󰌟", color: "#777bb3" },
++        "ps1" => {glyph: "󰨊", color: "#2670be" },
++        "dart" => {glyph: "", color: "#2db7f6" },
++        "ruby" => {glyph: "󰴭", color: "#d30000" },
++        "swift" => {glyph: "󰛥", color: "#fba03d" },
++        "r" => {glyph: "󰟔", color: "#236abd" },
++        "groovy" => {glyph: "", color: "#4298b8" },
++        "scala" => {glyph: "", color: "#db3331" },
++        "pl" => {glyph: "", color: "#006894" },
++        "clj" => {glyph: "", color: "#91b4ff" },
++        "jl" => {glyph: "", color: "#cb3c33" },
++        "zig" => {glyph: "", color: "#f7a41d" },
++        "f" => {glyph: "󱈚", color: "#734f96" },
++        "erl" => {glyph: "", color: "#a90432" },
++        "ml" => {glyph: "", color: "#f29000" },
++        "cr" => {glyph: "" },
++        "svelte" => {glyph: "", color: "#ff5620" },
++        "gd" => {glyph: "", color: "#478cbf" },
++        "nim" => {glyph: "", color: "#efc743" },
++        "jsx" => {glyph: "", color: "#61dafb" },
++        "tsx" => {glyph: "", color: "#61dafb" },
++        "twig" => {glyph: "", color: "#a8bf21" },
++        "lua" => {glyph: "", color: "#74c7ec" },
++        "vue" => {glyph: "", color: "#40b884" },
++        "lisp" => {glyph: "" },
++        "elm" => {glyph: "", color: "#5b6379" },
++        "res" => {glyph: "", color: "#ef5350" },
++        "sol" => {glyph: "" },
++        "vala" => {glyph: "", color: "#a972e4" },
++        "scm" => {glyph: "", color: "#d53d32" },
++        "v" => {glyph: "", color: "#5e87c0" },
++        "prisma" => {glyph: "" },
++        "ada" => {glyph: "", color: "#195c19" },
++        "astro" => {glyph: "", color: "#ed45cf" },
++        "m" => {glyph: "", color: "#ed8012" },
++        "rst" => {glyph: "", color: "#74aada" },
++        "cl" => {glyph: "" },
++        "njk" => {glyph: "", color: "#53a553" },
++        "jinja" => {glyph: "" },
++        "bicep" => {glyph: "", color: "#529ab7" },
++        "wat" => {glyph: "", color: "#644fef" },
++        "md" => {glyph: "" },
++        "make" => {glyph: "" },
++        "cmake" => {glyph: "", color: "#3eae2b" },
++        "nix" => {glyph: "", color: "#4f73bd" },
++        "awk" => {glyph: "" },
++        "ll" => {glyph: "", color: "#09627d" },
++        "regex" => {glyph: "" },
++        "gql" => {glyph: "", color: "#e534ab" },
++        "typst" => {glyph: "", color: "#5bc0af" },
++        "json" => {glyph: "" },
++        "toml" => {glyph: "", color: "#a8403e" },
++        "xml" => {glyph: "󰗀", color: "#8bc34a" },
++        "tex" => {glyph: "", color: "#008080" },
++        "todotxt" => {glyph: "", color: "#7cb342" },
++        "svg" => {glyph: "󰜡", color: "#ffb300" },
++        "png" => {glyph: "", color: "#26a69a" },
++        "jpeg" => {glyph: "", color: "#26a69a" },
++        "jpg" => {glyph: "", color: "#26a69a" },
++        "lock" => {glyph: "", color: "#70797d" },
++        "Dockerfile" => {glyph: "󰡨", color: "#0096e6" },
++        "csv" => {glyph: "", color: "#1abb54" },
++        "ipynb" => {glyph: "", color: "#f47724" },
++        "ttf" => {glyph: "", color: "#144cb7" },
++        "exe" => {glyph: "" },
++    }
++});
++
++impl Mime {
++    #[inline]
++    pub fn directory(&self) -> Option<&str> {
++        if !self.enabled {
++            return None;
++        }
++
++        let dir = self.directory.as_ref().map_or("󰉋", |dir| dir.as_str());
++
++        Some(dir)
++    }
++
++    // Returns the icon that matches the name, if any, otherwise returns the name back.
++    #[inline]
++    pub fn get<'b, 'a: 'b>(
++        &'a self,
++        path: Option<&'b PathBuf>,
++        name: Option<&'b str>,
++    ) -> Option<&'b Icon> {
++        if !self.enabled {
++            return None;
++        }
++
++        if let Some(path) = path {
++            // Search for fully specified name first so that custom icons,
++            // for example for `README.md` or `docker-compose.yaml`, can
++            // take precedence over any extension it make have.
++            if let Some(name) = path.file_name() {
++                // Search config options first
++                if let Some(icon) = self.mime.get(name.to_str()?) {
++                    return Some(icon);
++                }
++
++                // Then built-in
++                if let Some(icon) = MIMES.get(name.to_str()?) {
++                    return Some(icon);
++                }
++            }
++
++            // Try to search for icons based off of the extension.
++            if let Some(name) = path.extension() {
++                // Search config options first
++                if let Some(icon) = self.mime.get(name.to_str()?) {
++                    return Some(icon);
++                }
++
++                // Then built-in
++                if let Some(icon) = MIMES.get(name.to_str()?) {
++                    return Some(icon);
++                }
++            }
++        }
++
++        if let Some(name) = name {
++            // Search config options first
++            if let Some(icon) = self.mime.get(name) {
++                return Some(icon);
++            }
++
++            // Then built-in
++            if let Some(icon) = MIMES.get(name) {
++                return Some(icon);
++            }
++        }
++
++        // If icons are enabled but there is no matching found, default to the `text` icon.
++        //
++        // Check user configured first
++        if let Some(icon) = self.mime.get("text") {
++            return Some(icon);
++        }
++
++        // Then built-in
++        MIMES.get("text")
++    }
++}
++
++#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
++pub struct Dap {
++    verified: Option<String>,
++    unverified: Option<String>,
++}
++
++impl Dap {
++    #[inline]
++    pub fn verified(&self) -> &str {
++        self.verified.as_ref().map_or("●", |verified| verified)
++    }
++
++    #[inline]
++    pub fn unverified(&self) -> &str {
++        self.unverified
++            .as_ref()
++            .map_or("◯", |unverified| unverified)
++    }
++}
++
++#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Default)]
++pub struct Gutter {
++    added: Option<String>,
++    modified: Option<String>,
++    deleted: Option<String>,
++}
++
++impl Gutter {
++    #[inline]
++    pub fn added(&self) -> &str {
++        self.added.as_ref().map_or("▍", |added| added)
++    }
++
++    #[inline]
++    pub fn modified(&self) -> &str {
++        self.modified.as_ref().map_or("▍", |modified| modified)
++    }
++
++    #[inline]
++    pub fn deleted(&self) -> &str {
++        self.deleted.as_ref().map_or("▔", |deleted| deleted)
++    }
++}
++
++#[derive(Debug, Default, PartialEq, Eq, Clone)]
++pub struct Icon {
++    glyph: String,
++    color: Option<Color>,
++}
++
++impl Icon {
++    pub fn glyph(&self) -> &str {
++        self.glyph.as_str()
++    }
++
++    pub const fn color(&self) -> Option<Color> {
++        self.color
++    }
++}
++
++impl<'de> Deserialize<'de> for Icon {
++    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
++    where
++        D: serde::Deserializer<'de>,
++    {
++        deserializer.deserialize_any(IconVisitor)
++    }
++}
++
++struct IconVisitor;
++
++impl<'de> serde::de::Visitor<'de> for IconVisitor {
++    type Value = Icon;
++
++    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
++        write!(
++            formatter,
++            "a string glyph or a map with 'glyph' and optional 'color'"
++        )
++    }
++
++    fn visit_str<E>(self, glyph: &str) -> Result<Self::Value, E>
++    where
++        E: serde::de::Error,
++    {
++        Ok(Icon {
++            glyph: String::from(glyph),
++            color: None,
++        })
++    }
++
++    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
++    where
++        M: serde::de::MapAccess<'de>,
++    {
++        let mut glyph = None;
++        let mut color = None;
++
++        while let Some(key) = map.next_key::<String>()? {
++            match key.as_str() {
++                "glyph" => {
++                    if glyph.is_some() {
++                        return Err(serde::de::Error::duplicate_field("glyph"));
++                    }
++                    glyph = Some(map.next_value::<String>()?);
++                }
++                "color" => {
++                    if color.is_some() {
++                        return Err(serde::de::Error::duplicate_field("color"));
++                    }
++                    color = Some(map.next_value::<String>()?);
++                }
++                _ => return Err(serde::de::Error::unknown_field(&key, &["glyph", "color"])),
++            }
++        }
++
++        let glyph = glyph.ok_or_else(|| serde::de::Error::missing_field("glyph"))?;
++
++        let color = if let Some(hex) = color {
++            let color = Color::from_hex(&hex).ok_or_else(|| {
++                serde::de::Error::custom(format!("`{hex} is not a valid color code`"))
++            })?;
++            Some(color)
++        } else {
++            None
++        };
++
++        Ok(Icon { glyph, color })
++    }
++}
+diff --git a/helix-view/src/lib.rs b/helix-view/src/lib.rs
+index e30a23381..89a58839c 100644
+--- a/helix-view/src/lib.rs
++++ b/helix-view/src/lib.rs
+@@ -11,6 +11,7 @@
+ pub mod graphics;
+ pub mod gutter;
+ pub mod handlers;
++pub mod icons;
+ pub mod info;
+ pub mod input;
+ pub mod keyboard;
+-- 
+2.50.0.windows.1
+
